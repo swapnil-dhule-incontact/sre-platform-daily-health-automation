@@ -1,0 +1,456 @@
+#jinja2:lstrip_blocks:False,trim_blocks:False
+---
+{% set new_revision_number = revision.replace(".","") %}
+
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: Global Auth Discovery endpoint Lambda, revision={{revision}}
+
+Mappings:
+    Environments:
+        icpune-perf:
+            isFirstDeploymentDone: "true"
+            ProvisionedConcurrentExecutions: 620
+            ReservedConcurrentExecutions: 620
+            MemorySize: 128
+        icpune-perf-au:
+            isFirstDeploymentDone: "true"
+            ProvisionedConcurrentExecutions: 620
+            ReservedConcurrentExecutions: 620
+            MemorySize: 128
+        icpune-perf-de:
+            isFirstDeploymentDone: "true"
+            ProvisionedConcurrentExecutions: 620
+            ReservedConcurrentExecutions: 620
+            MemorySize: 128
+        dev:
+            isFirstDeploymentDone: "true"
+            ProvisionedConcurrentExecutions: 1
+            ReservedConcurrentExecutions: 5
+            MemorySize: 128
+        dev-ue1:
+            isFirstDeploymentDone: "true"
+            ProvisionedConcurrentExecutions: 1
+            ReservedConcurrentExecutions: 5
+            MemorySize: 128
+        test:
+            isFirstDeploymentDone: "true"
+            ProvisionedConcurrentExecutions: 1
+            ReservedConcurrentExecutions: 5
+            MemorySize: 128
+        test-ue1:
+            isFirstDeploymentDone: "true"
+            ProvisionedConcurrentExecutions: 1
+            ReservedConcurrentExecutions: 5
+            MemorySize: 128
+        perf:
+            isFirstDeploymentDone: "false"
+            ProvisionedConcurrentExecutions: 1
+            ReservedConcurrentExecutions: 5
+            MemorySize: 128
+        perf-wfo:
+            isFirstDeploymentDone: "false"
+            ProvisionedConcurrentExecutions: 1
+            ReservedConcurrentExecutions: 5
+            MemorySize: 128
+        staging:
+            isFirstDeploymentDone: "true"
+            ProvisionedConcurrentExecutions: 1
+            ReservedConcurrentExecutions: 5
+            MemorySize: 128
+        staging-ue1:
+            isFirstDeploymentDone: "true"
+            ProvisionedConcurrentExecutions: 1
+            ReservedConcurrentExecutions: 5
+            MemorySize: 128
+        production:
+            isFirstDeploymentDone: "true"
+            ProvisionedConcurrentExecutions: 620
+            ReservedConcurrentExecutions: 620
+            MemorySize: 128
+        production-au:
+            isFirstDeploymentDone: "true"
+            ProvisionedConcurrentExecutions: 620
+            ReservedConcurrentExecutions: 620
+            MemorySize: 128
+        production-de:
+            isFirstDeploymentDone: "true"
+            ProvisionedConcurrentExecutions: 620
+            ReservedConcurrentExecutions: 620
+            MemorySize: 128
+        production-fedramp:
+            isFirstDeploymentDone: "false"
+            ProvisionedConcurrentExecutions: 1
+            ReservedConcurrentExecutions: 5
+            MemorySize: 128
+
+Parameters:
+
+    EnvironmentType:
+        Description: The environment type. All resources will be created with environment type prefix
+        Type: String
+        Default: {{stack_prefix}}
+
+    SourceCodeBucket:
+        Description: S3 bucket with lambda source code
+        Type: String
+        Default: {{cf_bucket}}
+        
+    GlobalAuthALBListener:
+        Description: Global Authentication ALB Listener.
+        Type: 'AWS::SSM::Parameter::Value<String>'
+        Default: /{{stack_prefix}}/aws/alb/listener/global/auth/arn
+        
+    GlobalAlarmSNSTopic:
+        Description: ARN for Alarm SNS topic.
+        Type: 'AWS::SSM::Parameter::Value<String>'
+        Default: /{{stack_prefix}}/aws/sns/topic/global-alarm-sns-topic
+
+    GlobalBMCAlarmSNSTopic:
+        Description: ARN for BMC Alarm SNS topic.
+        Type: 'AWS::SSM::Parameter::Value<String>'
+        Default: /{{stack_prefix}}/aws/sns/topic/global-bmc-info-alarm-topic
+
+
+Conditions:
+    ISCurrentAliasExist: !Equals [!FindInMap [Environments, !Ref EnvironmentType, isFirstDeploymentDone], "true"]
+
+Resources:
+    LambdaGlobalAuthDiscoveryRole:
+        Type: AWS::IAM::Role
+        Properties:
+          RoleName: {{lambda_name}}-role
+          AssumeRolePolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: Allow
+                Principal:
+                  Service:
+                    - lambda.amazonaws.com
+                Action:
+                  - sts:AssumeRole
+          ManagedPolicyArns:
+            - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+            - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+          Policies:
+            -
+              PolicyName: LambdaGlobalAuthDiscoveryS3Access
+              PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                  -
+                    Effect: Allow
+                    Action:
+                      - s3:GetObject
+                    Resource:
+                      - "*"
+
+    LambdaGlobalAuthDiscoveryFunction:
+        Type: AWS::Lambda::Function
+        DependsOn:
+            - LambdaGlobalAuthDiscoveryRole
+        Properties:
+            FunctionName:   {{lambda_name}}
+            Description:    "Lambda for Global auth discovery endpoint"
+            Handler:        src/app/app.handler
+            Runtime:        nodejs12.x
+            Timeout:        30
+            MemorySize:     !FindInMap [Environments, !Ref EnvironmentType, MemorySize]
+            Role:           !GetAtt LambdaGlobalAuthDiscoveryRole.Arn
+            ReservedConcurrentExecutions : !FindInMap [Environments, !Ref EnvironmentType, ReservedConcurrentExecutions]
+            VpcConfig:
+                SecurityGroupIds:
+                  {% for sg in sec_groups -%}
+                    - {{sg}}
+                  {% endfor %}
+                SubnetIds:
+                  {% for sb in subnets -%}
+                    - {{sb}}
+                  {% endfor %}
+            Environment:
+                Variables:
+                    env_name:                                         "{{stack_prefix}}"
+            Code:
+                S3Bucket: !Ref SourceCodeBucket
+                S3Key:    "{{s3_directory}}/{{lambda_archive}}"
+            Tags:
+                -
+                    Key: Product
+                    Value: Platform
+                -
+                    Key: Service
+                    Value: Global Authentication Service
+                -
+                    Key: ApplicationOwner
+                    Value: Security And Compliance - Platform
+    
+                -   Key: InfrastructureOwner
+                    Value: DevOps
+    
+    GlobalAuthDiscoveryLambdaVersion:
+      Type: AWS::Lambda::Version
+      Properties:
+        FunctionName: !Ref LambdaGlobalAuthDiscoveryFunction
+        Description: lambda version
+      DependsOn:
+        - LambdaGlobalAuthDiscoveryFunction
+    
+    GlobalAuthDiscoveryLambdaVersion{{new_revision_number}}:
+      Condition: ISCurrentAliasExist
+      Type: AWS::Lambda::Version
+      UpdateReplacePolicy: Retain
+      DeletionPolicy: Retain
+      Properties:
+        FunctionName: !Ref LambdaGlobalAuthDiscoveryFunction
+        Description: lambda version
+      DependsOn:
+        - LambdaGlobalAuthDiscoveryFunction
+
+    GlobalAuthDiscoveryNewLambdaAlias:
+      Type: AWS::Lambda::Alias
+      Properties:
+        Description: Alias for new lambda version
+        FunctionName: {{lambda_name}}
+        FunctionVersion: !If [ISCurrentAliasExist, !GetAtt GlobalAuthDiscoveryLambdaVersion{{new_revision_number}}.Version, !GetAtt GlobalAuthDiscoveryLambdaVersion.Version]
+        Name: new
+
+    GlobalAuthDiscoveryCurrentLambdaAlias:
+      Type: AWS::Lambda::Alias
+      Properties:
+        Description: Alias for current lambda version
+        FunctionName: {{lambda_name}}
+        FunctionVersion: !GetAtt GlobalAuthDiscoveryLambdaVersion.Version
+        Name: current
+        ProvisionedConcurrencyConfig:
+            ProvisionedConcurrentExecutions: !FindInMap [Environments, !Ref EnvironmentType, ProvisionedConcurrentExecutions]
+      DependsOn:
+        - GlobalAuthDiscoveryLambdaVersion
+
+    GlobalAuthDiscoveryOldLambdaAlias:
+      Type: AWS::Lambda::Alias
+      Properties:
+        Description: Alias for old lambda version
+        FunctionName: {{lambda_name}}
+        FunctionVersion: !GetAtt GlobalAuthDiscoveryLambdaVersion.Version
+        Name: old
+      DependsOn:
+        - GlobalAuthDiscoveryLambdaVersion
+
+    PermissionLambdaCurrentGlobalAuthDiscoveryLambdaApi:
+      Type: "AWS::Lambda::Permission"
+      DependsOn:
+          - GlobalAuthDiscoveryCurrentLambdaAlias
+      Properties:
+        FunctionName:  !Join [":", [!Ref LambdaGlobalAuthDiscoveryFunction, "current"]]
+        Action:        "lambda:InvokeFunction"
+        Principal:     "elasticloadbalancing.amazonaws.com"
+
+    PermissionLambdaNewGlobalAuthDiscoveryLambdaApi:
+      Type: "AWS::Lambda::Permission"
+      DependsOn:
+          - GlobalAuthDiscoveryNewLambdaAlias
+      Properties:
+        FunctionName:  !Join [":", [!Ref LambdaGlobalAuthDiscoveryFunction, "new"]]
+        Action:        "lambda:InvokeFunction"
+        Principal:     "elasticloadbalancing.amazonaws.com"
+
+    PermissionLambdaOldGlobalAuthDiscoveryLambdaApi:
+      Type: "AWS::Lambda::Permission"
+      DependsOn:
+          - GlobalAuthDiscoveryOldLambdaAlias
+      Properties:
+        FunctionName:  !Join [":", [!Ref LambdaGlobalAuthDiscoveryFunction, "old"]]
+        Action:        "lambda:InvokeFunction"
+        Principal:     "elasticloadbalancing.amazonaws.com"
+
+    #ALB Target Group
+    LambdaGlobalAuthDiscoveryTG:
+        Type: AWS::ElasticLoadBalancingV2::TargetGroup
+        DependsOn: GlobalAuthDiscoveryCurrentLambdaAlias
+        Properties:
+            Name: !Join ['-', [!Ref EnvironmentType, 'GADiscLmdaTG']]
+            TargetType: lambda
+            Targets:
+                -   Id: !Join [":", [!GetAtt LambdaGlobalAuthDiscoveryFunction.Arn, "current"]]
+            Tags:
+                -
+                    Key: Product
+                    Value: platform
+                -
+                    Key: Service
+                    Value: Global Authentication Service
+                -
+                    Key: ApplicationOwner
+                    Value: Security And Compliance - Platform
+                -
+                    Key: InfrastructureOwner
+                    Value: DevOps
+                -
+                    Key: 'nice:resource-name'
+                    Value:
+                        Fn::Join:
+                            - "-"
+                            -   -   Ref: EnvironmentType
+                                - global-tg
+
+    LambdaGlobalAuthDiscoveryListenerRule: # The ALB Listener rule that forwards all traffic destined for the Game of Life test environment to the appropriate Target Group
+        Type: AWS::ElasticLoadBalancingV2::ListenerRule
+        DependsOn: LambdaGlobalAuthDiscoveryTG
+        # DependedOn: None
+        Properties:
+            Actions:
+                -   Type: forward
+                    TargetGroupArn: !Ref LambdaGlobalAuthDiscoveryTG
+            Conditions:
+                -   Field: path-pattern
+                    Values:
+                        - "/.well-known/openid-configuration"
+            ListenerArn: !Ref GlobalAuthALBListener
+            Priority: 49988
+
+    LambdaGlobalAuthDiscoveryTGNew:
+        Type: AWS::ElasticLoadBalancingV2::TargetGroup
+        DependsOn: GlobalAuthDiscoveryNewLambdaAlias
+        Properties:
+            Name: !Join ['-', [!Ref EnvironmentType, 'GADiscLmdaTGNew']]
+            TargetType: lambda
+            Targets:
+                -   Id: !Join [":", [!GetAtt LambdaGlobalAuthDiscoveryFunction.Arn, "new"]]
+            Tags:
+                -
+                    Key: Product
+                    Value: Platform
+                -
+                    Key: Service
+                    Value: Global Authentication Service
+                -
+                    Key: ApplicationOwner
+                    Value: Security And Compliance - Platform
+                -
+                    Key: InfrastructureOwner
+                    Value: DevOps
+                -
+                    Key: 'nice:resource-name'
+                    Value:
+                        Fn::Join:
+                            - "-"
+                            -   -   Ref: EnvironmentType
+                                - global-tg
+
+    LambdaGlobalAuthDiscoveryListenerRuleNew: # The ALB Listener rule that forwards all traffic which has header for new alias to the appropriate Target Group
+        Type: AWS::ElasticLoadBalancingV2::ListenerRule
+        DependsOn: LambdaGlobalAuthDiscoveryTGNew
+        Properties:
+            Actions:
+                -   Type: forward
+                    TargetGroupArn: !Ref LambdaGlobalAuthDiscoveryTGNew
+            Conditions:
+                -   Field: path-pattern
+                    Values:
+                        - "/.well-known/openid-configuration"
+                -   Field: http-header
+                    HttpHeaderConfig:
+                        HttpHeaderName: alias
+                        Values:
+                          - new
+            ListenerArn: !Ref GlobalAuthALBListener
+            Priority: 49750
+
+    LambdaGlobalAuthDiscoveryTGOld:
+        Type: AWS::ElasticLoadBalancingV2::TargetGroup
+        DependsOn: GlobalAuthDiscoveryOldLambdaAlias
+        Properties:
+            Name: !Join ['-', [!Ref EnvironmentType, 'GADiscLmdaTGOld']]
+            TargetType: lambda
+            Targets:
+                -   Id: !Join [":", [!GetAtt LambdaGlobalAuthDiscoveryFunction.Arn, "old"]]
+            Tags:
+                -
+                    Key: Product
+                    Value: Platform
+                -
+                    Key: Service
+                    Value: Global Authentication Service
+                -
+                    Key: ApplicationOwner
+                    Value: Security And Compliance - Platform
+                -
+                    Key: InfrastructureOwner
+                    Value: DevOps
+                -
+                    Key: 'nice:resource-name'
+                    Value:
+                        Fn::Join:
+                            - "-"
+                            -   -   Ref: EnvironmentType
+                                - global-tg
+
+    LambdaGlobalAuthDiscoveryListenerRuleOld: # The ALB Listener rule that forwards all traffic which has header for old alias to the appropriate Target Group
+        Type: AWS::ElasticLoadBalancingV2::ListenerRule
+        DependsOn: LambdaGlobalAuthDiscoveryTGOld
+        Properties:
+            Actions:
+                -   Type: forward
+                    TargetGroupArn: !Ref LambdaGlobalAuthDiscoveryTGOld
+            Conditions:
+                -   Field: path-pattern
+                    Values:
+                        - "/.well-known/openid-configuration"
+                -   Field: http-header
+                    HttpHeaderConfig:
+                        HttpHeaderName: alias
+                        Values:
+                          - old
+            ListenerArn: !Ref GlobalAuthALBListener
+            Priority: 49751
+
+    InvocationErrorAlarm:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        AlarmName: !Join ["-", [Ref: EnvironmentType, "UH-lambda-global-auth-discovery-lambda-InvocationErrors-Info"]]
+        AlarmDescription: !Sub >
+          Alarm if {{lambda_name}} invocation finish with Error
+        Namespace: AWS/Lambda
+        MetricName: Errors
+        Dimensions:
+          - Name: FunctionName
+            Value: {{lambda_name}}
+        Statistic: Average
+        Period: '300'
+        EvaluationPeriods: '1'
+        Threshold: '0.0'
+        ComparisonOperator: GreaterThanThreshold
+        TreatMissingData: notBreaching
+        AlarmActions:
+            - !Ref GlobalAlarmSNSTopic
+            - !Ref GlobalBMCAlarmSNSTopic
+
+    LambdaThrottlesAlarm:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        AlarmName: !Join ["-", [Ref: EnvironmentType, "UH-lambda-global-auth-discovery-lambda-LambdaThrottles-Info"]]
+        AlarmDescription: !Sub >
+          Alarm if {{lambda_name}} throttles finish with Error
+        Namespace: AWS/Lambda
+        MetricName: Throttles
+        Dimensions:
+          - Name: FunctionName
+            Value: {{lambda_name}}
+        Statistic: Sum
+        Period: '300'
+        EvaluationPeriods: '1'
+        Threshold: '0.0'
+        ComparisonOperator: GreaterThanThreshold
+        TreatMissingData: notBreaching
+        AlarmActions:
+            - !Ref GlobalAlarmSNSTopic
+            - !Ref GlobalBMCAlarmSNSTopic
+    
+Outputs:
+
+    FunctionArn:
+        Description:    "The ARN of the lambda function"
+        Value:          !GetAtt LambdaGlobalAuthDiscoveryFunction.Arn
+        Export:
+          Name:       {{stack_prefix}}-LambdaGlobalAuthDiscoveryFunction

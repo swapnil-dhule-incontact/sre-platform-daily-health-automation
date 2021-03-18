@@ -1,0 +1,12 @@
+#cf_bucket is only required for ICPUNE
+#cf_bucket:                "cf-templates-ansible-{{stack_prefix}}"
+template:                 "{{stack_prefix}}-{{lambda_name_default}}-template-{{revision}}.yml"
+lambda_name:              "{{stack_prefix}}-{{lambda_name_default}}"
+stack_name:               "{{stack_prefix}}-{{lambda_name_default}}-lambda"
+lambda_archive:           "{{lambda_name_default}}-{{revision}}.zip"
+account_id:               "{{lookup('get_account_id',profile=profile)}}"
+source_dir:               "{{workspace}}"
+s3_directory:             "{{lambda_name_default}}-lambda"
+vpc_id:                   "{{lookup('get_vpc_id',profile=profile,vpcName='GlobalVPC:'+profile)}}"
+subnets:                  "{{lookup('get_vpc_subnets',profile=profile,vpc_id=vpc_id,subnet_name='global-private-subnet')}}"
+sec_groups:               "{{lookup('get_vpc_secure_groups',profile=profile,vpc_id=vpc_id,tag_name='global-sg')}}"
